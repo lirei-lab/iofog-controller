@@ -359,12 +359,17 @@ async function reconcileFogPlatform (fogUuid, prep, transaction) {
     } else {
       upstreamRoutersIofogUuid = undefined
     }
-    const upstreamRouters = await RouterService.validateAndReturnUpstreamRouters(
+    // A router is never its own upstream. With no upstream named, a system fog is
+    // given the default router -- and once its own router is the default (it is,
+    // from this fog's first pass), that is itself: an inter-router connector to its
+    // own address, which the router refuses ("duplicates unique attribute 'name'")
+    // and crash-loops on (lab patch 0021; cluster fleet rebuild, 2026-10-20).
+    const upstreamRouters = (await RouterService.validateAndReturnUpstreamRouters(
       upstreamRoutersIofogUuid,
       fog.isSystem,
       defaultRouter,
       transaction
-    )
+    )).filter((upstream) => !router || upstream.id !== router.id)
 
     const host = spec.host || (router ? router.host : null)
     if (!router) {
