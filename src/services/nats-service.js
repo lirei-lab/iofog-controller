@@ -66,6 +66,10 @@ const DEFAULT_LEAF_PORT = 7422
 const DEFAULT_MQTT_PORT = 8883
 const DEFAULT_HTTP_PORT = 8222
 let natsReconcileRunning = false
+// The reason of the reconcile pass running in this async context, so a write it
+// makes can say which pass made it.
+const { AsyncLocalStorage } = require('async_hooks')
+const reconcileReason = new AsyncLocalStorage()
 let natsReconcilePending = false
 let natsReconcileScheduled = false
 
@@ -151,12 +155,22 @@ function _configMapDataHash (data) {
   return crypto.createHash('sha256').update(canonical).digest('hex')
 }
 
+// A periodic pass that has to rewrite a config map found it drifted: some event
+// that should have rewritten it did not. Said once per map, so a
+// missing hook shows in the log by name.
+function _notePeriodicCorrection (name) {
+  if (reconcileReason.getStore() === 'periodic') {
+    logger.warn(`Periodic NATS reconcile corrected config map ${name}: an event that should have updated it did not`)
+  }
+}
+
 async function _updateConfigMapIfChanged (name, data, existing, transaction) {
   const existingHash = _configMapDataHash(existing.data)
   const newHash = _configMapDataHash(data)
   if (existingHash === newHash) {
     return
   }
+  _notePeriodicCorrection(name)
   return ConfigMapService.updateConfigMapEndpoint(name, { data, immutable: false }, transaction)
 }
 
@@ -474,6 +488,7 @@ async function _buildLeafCredsConfigMap (fog, natsInstance, transaction) {
   const existing = await ConfigMapManager.getConfigMap(leafCredsMapName, transaction)
   const credsDataUnchanged = existing && _configMapDataHash(existing.data) === _configMapDataHash(credsData)
   if (!credsDataUnchanged) {
+    _notePeriodicCorrection(leafCredsMapName)
     if (existing) {
       await ConfigMapService.updateConfigMapEndpoint(leafCredsMapName, { data: credsData, immutable: false }, transaction)
     } else {
@@ -1643,7 +1658,9 @@ async function _reconcileResolverArtifactsOnceDb (options = {}, transaction) {
   }
   logger.info(`Reconciling NATS resolver artifacts for ${candidateFogs.length} fog(s)`)
 
-  const skipReissueForAccountDeleted = (reason === 'account-deleted')
+  // A periodic pass re-renders what the database already says; it does not issue
+  // new user credentials, which would rewrite every node's creds every pass.
+  const skipReissueForAccountDeleted = (reason === 'account-deleted' || reason === 'periodic')
   const candidateFogUuids = candidateFogs.map((f) => f.uuid)
 
   const natsAccounts = appIdsFromNatsApps.length > 0
@@ -1764,7 +1781,7 @@ async function _reconcileResolverArtifactsOnceDb (options = {}, transaction) {
   }
 }
 
-const REASON_VALUES = ['auth-mutation', 'account-created', 'account-deleted', 'account-rule-updated', 'user-rule-updated', 'server-deleted', 'cluster-routes-changed', 'system-account-created']
+const REASON_VALUES = ['auth-mutation', 'account-created', 'account-deleted', 'account-rule-updated', 'user-rule-updated', 'server-deleted', 'cluster-routes-changed', 'system-account-created', 'periodic']
 
 async function _computeAffectedFogUuidsForEnqueue (options, transaction) {
   const reason = options.reason || 'auth-mutation'
@@ -1880,11 +1897,17 @@ async function claimNextTask (controllerUuid, stalenessSeconds) {
 
 async function _reconcileResolverArtifactsDbLoop (options, transaction) {
   let fullServerJwtBundle = null
+  let passOptions = options
   do {
     natsReconcilePending = false
-    const result = await _reconcileResolverArtifactsOnceDb(options, transaction)
+    const result = await _reconcileResolverArtifactsOnceDb(passOptions, transaction)
     if (result && result.fullServerJwtBundle) {
       fullServerJwtBundle = result.fullServerJwtBundle
+    }
+    // A pass asked for while this one ran came from an event, which may need users
+    // reissued: a periodic pass does not run it as periodic.
+    if (passOptions.reason === 'periodic') {
+      passOptions = { ...passOptions, reason: 'auth-mutation' }
     }
   } while (natsReconcilePending)
   return { fullServerJwtBundle }
@@ -1901,24 +1924,26 @@ async function reconcileResolverArtifacts (...args) {
   const parentTx = _resolveParentTransaction(maybeTransaction, args.length > 1)
 
   natsReconcileRunning = true
-  try {
-    if (parentTx) {
-      const result = await _reconcileResolverArtifactsDbLoop(options, parentTx)
-      if (result.fullServerJwtBundle) {
-        _scheduleK8sAfterCommit(parentTx, () => _applyK8sJwtBundleExternal(result.fullServerJwtBundle))
+  return reconcileReason.run(options.reason || 'auth-mutation', async () => {
+    try {
+      if (parentTx) {
+        const result = await _reconcileResolverArtifactsDbLoop(options, parentTx)
+        if (result.fullServerJwtBundle) {
+          _scheduleK8sAfterCommit(parentTx, () => _applyK8sJwtBundleExternal(result.fullServerJwtBundle))
+        }
+        return { scheduled: false }
       }
-      return { scheduled: false }
-    }
 
-    const result = await runInTransaction(
-      (transaction) => _reconcileResolverArtifactsDbLoop(options, transaction),
-      { priority: PRIORITY_BACKGROUND, label: 'nats.reconcileResolverArtifacts' }
-    )
-    await _applyK8sJwtBundleExternal(result.fullServerJwtBundle)
-    return { scheduled: false }
-  } finally {
-    natsReconcileRunning = false
-  }
+      const result = await runInTransaction(
+        (transaction) => _reconcileResolverArtifactsDbLoop(options, transaction),
+        { priority: PRIORITY_BACKGROUND, label: 'nats.reconcileResolverArtifacts' }
+      )
+      await _applyK8sJwtBundleExternal(result.fullServerJwtBundle)
+      return { scheduled: false }
+    } finally {
+      natsReconcileRunning = false
+    }
+  })
 }
 
 function isReconcileRunning () {

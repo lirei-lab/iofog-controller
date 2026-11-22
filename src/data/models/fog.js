@@ -392,6 +392,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.TEXT,
       field: 'knowledge_status'
     },
+    natsConfigStatus: {
+      type: DataTypes.TEXT,
+      field: 'nats_config_status'
+    },
     activeKnowledge: {
       type: DataTypes.BIGINT,
       defaultValue: 0,

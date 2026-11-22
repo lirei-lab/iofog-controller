@@ -353,6 +353,7 @@ const updateAgentStatus = async function (agentStatus, fog, transaction) {
     activeModels: agentStatus.activeModels,
     modelLastUpdate: agentStatus.modelLastUpdate,
     knowledgeStatus: _stringifyStatusField(agentStatus.knowledgeStatus),
+    natsConfigStatus: _stringifyStatusField(agentStatus.natsConfig),
     activeKnowledge: agentStatus.activeKnowledge,
     knowledgeLastUpdate: agentStatus.knowledgeLastUpdate
   }
@@ -422,6 +423,7 @@ const updateAgentStatus = async function (agentStatus, fog, transaction) {
   const reportedStatuses = JSON.parse(agentStatus.microserviceStatus)
   await _updateMicroserviceStatuses(reportedStatuses, fog, transaction)
   await _resendLaggingMicroservices(agentStatus, reportedStatuses, fog, transaction)
+  await _resendLaggingVolumeMounts(agentStatus, fog, transaction)
   await MicroserviceService.deleteNotRunningMicroservices(fog, transaction)
 }
 
@@ -496,6 +498,62 @@ const _resendLaggingMicroservices = async function (agentStatus, reportedStatuse
       iofogUuid: fog.uuid,
       lastUpdated: moment().toISOString()
     }, transaction)
+  }
+}
+
+// The same for volume mounts: a node's NATS configuration, JWT
+// bundle and leaf creds reach it as volume mounts, on the same one-shot flag. An
+// agent that reports volumeMountVersions says, per mount, the version it holds on
+// disk; one linked here that lags for RESEND_AFTER_MS gets the volumeMounts flag
+// raised again, with the same throttle. Old agents send nothing: nothing is resent.
+const _laggingMounts = new Map()
+
+const _resendLaggingVolumeMounts = async function (agentStatus, fog, transaction) {
+  if (!Array.isArray(agentStatus.volumeMountVersions)) {
+    return
+  }
+  const held = new Map(agentStatus.volumeMountVersions.filter((it) => it && it.uuid).map((it) => [it.uuid, Number(it.version) || 0]))
+  const fogEntity = await FogManager.findOne({ uuid: fog.uuid }, transaction)
+  const linked = fogEntity ? await fogEntity.getVolumeMounts({ attributes: ['uuid', 'name', 'version'], transaction }) : []
+  const now = Date.now()
+  const prefix = `${fog.uuid}|`
+  const seen = new Set()
+  const resend = []
+  for (const vm of linked || []) {
+    const key = prefix + vm.uuid
+    seen.add(key)
+    const version = Number(vm.version) || 0
+    if ((held.get(vm.uuid) || 0) >= version) {
+      _laggingMounts.delete(key)
+      continue
+    }
+    let lag = _laggingMounts.get(key)
+    if (!lag || lag.version !== version) {
+      lag = { version, since: now, resentAt: 0, resends: 0 }
+      _laggingMounts.set(key, lag)
+    }
+    if (now - lag.since < RESEND_AFTER_MS || now - lag.resentAt < RESEND_EVERY_MS) {
+      continue
+    }
+    if (lag.resends >= RESEND_MAX) {
+      if (lag.resends === RESEND_MAX) {
+        logger.warn(`Volume mount ${vm.name} on fog ${fog.uuid} still at version ${held.get(vm.uuid) || 0} of ${version} after ${RESEND_MAX} resends; not sending it again until it changes`)
+        lag.resends++
+      }
+      continue
+    }
+    lag.resentAt = now
+    lag.resends++
+    resend.push(`${vm.name} (${held.get(vm.uuid) || 0} of ${version})`)
+  }
+  for (const key of _laggingMounts.keys()) {
+    if (key.startsWith(prefix) && !seen.has(key)) {
+      _laggingMounts.delete(key)
+    }
+  }
+  if (resend.length) {
+    logger.info(`Resending the volume mounts to fog ${fog.uuid}: ${resend.join(', ')}`)
+    await ChangeTrackingService.update(fog.uuid, ChangeTrackingService.events.volumeMounts, transaction)
   }
 }
 

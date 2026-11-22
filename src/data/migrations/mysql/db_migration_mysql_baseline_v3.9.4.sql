@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS Fogs (
     active_models BIGINT DEFAULT 0,
     model_last_update BIGINT DEFAULT 0,
     knowledge_status TEXT,
+    nats_config_status TEXT,
     active_knowledge BIGINT DEFAULT 0,
     knowledge_last_update BIGINT DEFAULT 0,
     FOREIGN KEY (arch_id) REFERENCES Architectures (id)
