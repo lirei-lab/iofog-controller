@@ -7,13 +7,13 @@
 Use it in place of the upstream image; nothing else changes.
 
 ```bash
-docker pull ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.2
+docker pull ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.3
 ```
 
 The image is signed with Sigstore keyless signing by this repository's release workflow:
 
 ```bash
-cosign verify ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.2 \
+cosign verify ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.3 \
   --certificate-identity-regexp '^https://github.com/lirei-lab/iofog-controller/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

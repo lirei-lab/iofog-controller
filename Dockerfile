@@ -65,7 +65,7 @@ RUN microdnf install -y python3 && \
     ln -sf python3 /usr/bin/python && \
     python3 -m ensurepip && \
     pip3 install --no-cache --upgrade pip setuptools && \
-    microdnf install shadow-utils && \
+    microdnf install -y shadow-utils && \
     microdnf clean all
 RUN microdnf install -y tzdata &&  microdnf clean all
 RUN microdnf -y remove microdnf
