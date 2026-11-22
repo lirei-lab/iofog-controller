@@ -85,6 +85,21 @@ module.exports = (sequelize, DataTypes) => {
       field: 'schedule',
       defaultValue: 50
     },
+    // Delivery by generation: raised with every change row that
+    // names this microservice's node; the agent reports the generation it
+    // converged at, and the Controller sends the list again while it lags.
+    generation: {
+      type: DataTypes.INTEGER,
+      field: 'generation',
+      defaultValue: 1
+    },
+    // The generation at which a rebuild was last handed out. Unlike rebuild it is
+    // never cleared, so a rebuild whose response was lost is sent again.
+    rebuildGeneration: {
+      type: DataTypes.INTEGER,
+      field: 'rebuild_generation',
+      defaultValue: 0
+    },
     cpuSetCpus: {
       type: DataTypes.TEXT,
       field: 'cpu_set_cpus',

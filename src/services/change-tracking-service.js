@@ -98,10 +98,27 @@ async function create (ioFogUuid, transaction) {
 
 async function update (ioFogUuid, data, transaction) {
   await ChangeTrackingManager.create({ ...data, iofogUuid: ioFogUuid, lastUpdated: moment().toISOString() }, transaction)
+  await bumpGenerations(ioFogUuid, data, transaction)
 }
 
 async function updateIfChanged (ioFogUuid, data, transaction) {
   await ChangeTrackingManager.create({ ...data, iofogUuid: ioFogUuid, lastUpdated: moment().toISOString() }, transaction)
+  await bumpGenerations(ioFogUuid, data, transaction)
+}
+
+// Every change row that sends a node its microservices again raises the
+// generation of each microservice on that node. Raising them all,
+// not only the one that changed, needs no work at the thirty-odd call sites and
+// misses none; an unchanged microservice costs the agent a no-drift pass. The
+// generation is what the agent reports back once it has converged, so a lost
+// response or a skipped change shows as a lag the Controller can see and resend.
+async function bumpGenerations (ioFogUuid, data, transaction) {
+  if (!ioFogUuid || !data || !(data.microserviceList || data.microserviceConfig)) return
+  const MicroserviceManager = require('../data/managers/microservice-manager')
+  const { literal } = require('sequelize')
+  // silent: updatedAt stays the time of the microservice's own last change.
+  await MicroserviceManager.getEntity().update({ generation: literal('generation + 1') },
+    { where: { iofogUuid: ioFogUuid }, transaction, silent: true })
 }
 
 // "<timestamp>|ids:<id>,<id>..." -- what was delivered, carried in lastUpdated

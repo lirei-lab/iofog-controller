@@ -10,6 +10,7 @@ const FogManager = require('../data/managers/iofog-manager')
 const FogPlatformStatusManager = require('../data/managers/fog-platform-status-manager')
 const FogKeyService = require('../services/iofog-key-service')
 const ChangeTrackingService = require('./change-tracking-service')
+const ChangeTrackingManager = require('../data/managers/change-tracking-manager')
 const FogVersionCommandManager = require('../data/managers/iofog-version-command-manager')
 const { refreshProvisionKeyForFog } = require('./iofog-service')
 const RegistryManager = require('../data/managers/registry-manager')
@@ -418,8 +419,84 @@ const updateAgentStatus = async function (agentStatus, fog, transaction) {
     uuid: fog.uuid
   }, fogStatus, transaction)
 
-  await _updateMicroserviceStatuses(JSON.parse(agentStatus.microserviceStatus), fog, transaction)
+  const reportedStatuses = JSON.parse(agentStatus.microserviceStatus)
+  await _updateMicroserviceStatuses(reportedStatuses, fog, transaction)
+  await _resendLaggingMicroservices(agentStatus, reportedStatuses, fog, transaction)
   await MicroserviceService.deleteNotRunningMicroservices(fog, transaction)
+}
+
+// Delivery by generation. An agent that says observesGeneration
+// reports, for each microservice, the generation it converged at. One assigned
+// here that lags its generation for RESEND_AFTER_MS -- the response was lost, the
+// agent restarted mid-fetch, the change was skipped -- gets the list sent again,
+// at most every RESEND_EVERY_MS and RESEND_MAX times per generation, so one that
+// can never converge (no image for the node's architecture) does not resend for
+// ever. The resend writes a change row without raising generations: it is the
+// same desired state again, not a new one. The bookkeeping is per Controller
+// process; with two behind one address the worst case is twice the resends.
+const RESEND_AFTER_MS = 60 * 1000
+const RESEND_EVERY_MS = 120 * 1000
+const RESEND_MAX = 5
+const _lagging = new Map()
+
+const _resendLaggingMicroservices = async function (agentStatus, reportedStatuses, fog, transaction) {
+  if (agentStatus.observesGeneration !== true) {
+    return
+  }
+  const reported = Array.isArray(reportedStatuses) ? reportedStatuses : []
+  const observed = new Map(reported.filter((it) => it && it.id).map((it) => [it.id, Number(it.observedGeneration) || 0]))
+  const assigned = await MicroserviceManager.findAll({ iofogUuid: fog.uuid }, transaction)
+  const applicationIds = [...new Set((assigned || []).map((ms) => ms.applicationId).filter((id) => id != null))]
+  const applications = applicationIds.length ? await ApplicationManager.findAll({ id: applicationIds }, transaction) : []
+  const activeApps = new Set((applications || []).filter((app) => app.isActivated).map((app) => app.id))
+  const now = Date.now()
+  const prefix = `${fog.uuid}|`
+  const seen = new Set()
+  const resend = []
+  for (const ms of assigned || []) {
+    // What GET /agent/microservices hands out: activated, in an activated application, not being deleted.
+    if (!ms.isActivated || ms.delete || !activeApps.has(ms.applicationId)) {
+      continue
+    }
+    const key = prefix + ms.uuid
+    seen.add(key)
+    const generation = Number(ms.generation) || 0
+    if ((observed.get(ms.uuid) || 0) >= generation) {
+      _lagging.delete(key)
+      continue
+    }
+    let lag = _lagging.get(key)
+    if (!lag || lag.generation !== generation) {
+      lag = { generation, since: now, resentAt: 0, resends: 0 }
+      _lagging.set(key, lag)
+    }
+    if (now - lag.since < RESEND_AFTER_MS || now - lag.resentAt < RESEND_EVERY_MS) {
+      continue
+    }
+    if (lag.resends >= RESEND_MAX) {
+      if (lag.resends === RESEND_MAX) {
+        logger.warn(`Microservice ${ms.uuid} on fog ${fog.uuid} still reports generation ${observed.get(ms.uuid) || 0} of ${generation} after ${RESEND_MAX} resends; not sending it again until it changes`)
+        lag.resends++
+      }
+      continue
+    }
+    lag.resentAt = now
+    lag.resends++
+    resend.push(`${ms.uuid} (${observed.get(ms.uuid) || 0} of ${generation})`)
+  }
+  for (const key of _lagging.keys()) {
+    if (key.startsWith(prefix) && !seen.has(key)) {
+      _lagging.delete(key)
+    }
+  }
+  if (resend.length) {
+    logger.info(`Resending the microservice list to fog ${fog.uuid}: ${resend.join(', ')}`)
+    await ChangeTrackingManager.create({
+      ...ChangeTrackingService.events.microserviceList,
+      iofogUuid: fog.uuid,
+      lastUpdated: moment().toISOString()
+    }, transaction)
+  }
 }
 
 const _updateMicroserviceStatuses = async function (microserviceStatus, fog, transaction) {
@@ -437,7 +514,8 @@ const _updateMicroserviceStatuses = async function (microserviceStatus, fog, tra
       errorMessage: status.errorMessage,
       ipAddress: status.ipAddress,
       execSessionIds: status.execSessionIds,
-      podId: status.podId
+      podId: status.podId,
+      observedGeneration: Number.isInteger(status.observedGeneration) ? status.observedGeneration : undefined
     }
     applyRuntimeMetrics(observedStatus, observedStatus.status)
     applyCrashExtras(observedStatus, status)
@@ -617,6 +695,9 @@ const getAgentMicroservices = async function (fog, transaction) {
       config: microservice.config,
       annotations: microservice.annotations,
       rebuild: microservice.rebuild,
+      // see the rebuild clear below.
+      generation: microservice.generation,
+      rebuildGeneration: microservice.rebuild ? microservice.generation : microservice.rebuildGeneration,
       hostNetworkMode: microservice.hostNetworkMode,
       isPrivileged: microservice.isPrivileged,
       cpuSetCpus: microservice.cpuSetCpus,
@@ -670,11 +751,18 @@ const getAgentMicroservices = async function (fog, transaction) {
     }
 
     response.push(responseMicroservice)
+    // rebuild is cleared as it is handed out, so a response that never arrives
+    // loses it. Its generation is kept instead: an agent that
+    // reports generations rebuilds when rebuildGeneration is above the generation
+    // it converged at, however many times the list reaches it; one that does not
+    // reads rebuild, as before.
+    const handedOut = { rebuild: false }
+    if (microservice.rebuild) {
+      handedOut.rebuildGeneration = microservice.generation
+    }
     await MicroserviceManager.update({
       uuid: microservice.uuid
-    }, {
-      rebuild: false
-    }, transaction)
+    }, handedOut, transaction)
   }
 
   return {

@@ -89,6 +89,13 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: '',
       field: 'image_pull_status'
     },
+    // The generation the node last converged at; 0 from agents
+    // that do not report it.
+    observedGeneration: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      field: 'observed_generation'
+    },
     ipAddress: {
       type: DataTypes.TEXT,
       defaultValue: '',

@@ -223,6 +223,8 @@ CREATE TABLE IF NOT EXISTS "Microservices" (
     pid_mode VARCHAR(36),
     ipc_mode VARCHAR(36),
     schedule INT DEFAULT 50,
+    generation INT DEFAULT 1,
+    rebuild_generation INT DEFAULT 0,
     cpu_set_cpus TEXT,
     memory_limit DOUBLE PRECISION,
     is_activated BOOLEAN DEFAULT true,
@@ -327,6 +329,7 @@ CREATE TABLE IF NOT EXISTS "MicroserviceStatuses" (
     last_error_at BIGINT DEFAULT 0,
     restart_count INTEGER DEFAULT 0,
     image_pull_status TEXT DEFAULT '',
+    observed_generation INTEGER DEFAULT 0,
     FOREIGN KEY (microservice_uuid) REFERENCES "Microservices" (uuid) ON DELETE CASCADE
 );
 
