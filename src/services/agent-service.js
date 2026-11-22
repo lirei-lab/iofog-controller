@@ -365,6 +365,30 @@ const updateAgentStatus = async function (agentStatus, fog, transaction) {
   if (agentStatus.warningMessage.includes('HW signature changed') || agentStatus.warningMessage.includes('HW signature mismatch')) {
     fogStatus.securityStatus = 'WARNING'
     fogStatus.securityViolationInfo = 'Quarantined: HW signature mismatch'
+    // The fields above are the node's *current* state, and the node's next status
+    // post overwrites them: once it is re-provisioned it reports "No violation"
+    // and nothing anywhere says why it was removed from the fleet. A verdict
+    // without a recoverable reason cannot be corroborated. So the transition is
+    // also recorded in the event log, once -- not on every post while the warning
+    // lasts -- where GET /api/v3/events?eventType=SECURITY finds it.
+    if (existingFog.securityStatus !== 'WARNING') {
+      try {
+        const EventService = require('./event-service')
+        await EventService.createEvent({
+          eventType: 'SECURITY',
+          endpointType: 'agent',
+          resourceType: 'iofog',
+          resourceId: fog.uuid,
+          endpointPath: '/api/v3/agent/status',
+          status: 'WARNING',
+          statusMessage: `${fogStatus.securityViolationInfo}: ${agentStatus.warningMessage}`
+        }, transaction)
+      } catch (error) {
+        // The logger is not required at the top of this file (it is commented out
+        // there), so it is loaded here, where it is needed.
+        require('../logger').warn(`Unable to record the security event for fog ${fog.uuid}: ${error.message}`)
+      }
+    }
   } else {
     fogStatus.securityStatus = 'OK'
     fogStatus.securityViolationInfo = 'No violation'
