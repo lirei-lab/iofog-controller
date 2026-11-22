@@ -515,6 +515,31 @@ async function ensureLeafCredsForFog (fogUuid, transaction) {
     await _buildLeafRemotes(fog, natsInstance, transaction)
     const jwtBundle = await _buildJwtBundle(fog, natsInstance.isLeaf, transaction)
     await _ensureConfigMap(natsJwtBundleConfigMap(fog), jwtBundle, transaction)
+
+    // The creds and the account are only two of the three things a leaf needs to
+    // carry an application's traffic upstream. The third is a leafnodes remote for
+    // that account in the server's own configuration, and that is computed only
+    // when the configuration is rendered -- which happens when the node's NATS is
+    // re-ensured, not here. Without it the application connects and publishes
+    // locally, and nothing it writes ever reaches the hub: a hub stream sourcing
+    // the leaf's JetStream domain sees zero messages and no error anywhere.
+    //
+    // Rendered the same way the resolver reconcile loop renders it. The config map
+    // is only rewritten when the rendered text changed.
+    const certName = natsInstance.certSecretName || natsServerCertName(fog)
+    const configMapName = natsInstance.configMapName || natsConfigMapName(fog)
+    await _renderAndPersistNatsConfig(
+      fog,
+      natsInstance,
+      certName,
+      natsLocalMQTTCertName(fog),
+      configMapName,
+      NATS_CONFIG_KEY,
+      readTemplate('leaf.conf'),
+      !!natsInstance.isHub,
+      false,
+      transaction
+    )
   }
 }
 
