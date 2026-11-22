@@ -251,13 +251,32 @@ const updateAgentGpsEndPoint = async function (updateData, fog, transaction) {
 const getAgentConfigChanges = async function (ioFog, transaction) {
   const changeTrackings = await ChangeTrackingService.getByIoFogUuid(ioFog.uuid, transaction)
   const res = { ...CHANGE_TRACKING_DEFAULT }
-  res.lastUpdated = moment().toISOString()
+  // The agent sends this value straight back to resetAgentConfigChanges, and the
+  // controller then deletes every change row with lastUpdated <= it. So it has to
+  // describe the rows actually handed over, and nothing else.
+  //
+  // Handing back moment() instead makes the agent acknowledge changes that did
+  // not exist when it asked: a change created between this response and the
+  // agent's reset call is deleted without ever being delivered, and nothing
+  // retries it. Measured in a lab: a microservice created for a node while it was
+  // reconnecting after a reboot never reached the node at all, and only arrived
+  // when an unrelated write to the node's record created a fresh row 300 s later.
+  //
+  // Taking the last row's timestamp rather than the newest is the same bug in
+  // miniature, since findAll imposes no order.
+  res.lastUpdated = null
 
   for (const changeTracking of changeTrackings) {
     for (const key of CHANGE_TRACKING_KEYS) {
       res[key] = !!res[key] || !!changeTracking[key]
     }
-    res.lastUpdated = changeTracking.lastUpdated
+    if (!res.lastUpdated || moment(changeTracking.lastUpdated).isAfter(moment(res.lastUpdated))) {
+      res.lastUpdated = changeTracking.lastUpdated
+    }
+  }
+  if (!res.lastUpdated) {
+    // Nothing was delivered, so the agent's acknowledgement must delete nothing.
+    res.lastUpdated = new Date(0).toISOString()
   }
   return res
 }
