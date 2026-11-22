@@ -63,6 +63,7 @@ module.exports = {
   EVENT_RETENTION_DAYS: 'settings.eventRetentionDays',
   EVENT_CLEANUP_INTERVAL: 'settings.eventCleanupInterval',
   EVENT_AUDIT_ENABLED: 'settings.eventAuditEnabled',
+  EVENT_AUDIT_AGENT_HEARTBEATS: 'settings.eventAuditAgentHeartbeats',
   EVENT_CAPTURE_IP_ADDRESS: 'settings.eventCaptureIpAddress',
   CONTROLLER_HEARTBEAT_INTERVAL: 'settings.controllerHeartbeatInterval',
   CONTROLLER_INACTIVE_THRESHOLD: 'settings.controllerInactiveThreshold',
