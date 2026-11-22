@@ -6,7 +6,7 @@ on:
       - v*
 
 env:
-  IMAGE_NAME: controller
+  IMAGE_NAME: iofog-controller
 
 jobs:
   quality:
@@ -19,6 +19,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write   # cosign keyless signing
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -54,6 +55,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image
+        id: build
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
@@ -73,3 +75,9 @@ jobs:
             OCI_SOURCE_REPO=${{ env.OCI_SOURCE_REPO }}
             CONTROLLER_DISTRIBUTION=${{ env.CONTROLLER_DISTRIBUTION }}
             RBAC_API_VERSION=${{ env.RBAC_API_VERSION }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.8.1
+
+      - name: Sign the image (keyless)
+        run: cosign sign --yes "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"

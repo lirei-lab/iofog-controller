@@ -1,3 +1,55 @@
+# Controller: lirei-lab patched build
+
+> **Unofficial build.** This is Eclipse ioFog Controller **v3.9.4** with a series of fixes on top, built and published by lirei-lab to benchmark the ioFog stack. It is not affiliated with or endorsed by the Eclipse Foundation or Datasance. Upstream: [eclipse-iofog/Controller](https://github.com/eclipse-iofog/Controller), [Datasance/Controller](https://github.com/Datasance/Controller). License unchanged: [EPL-2.0](LICENSE).
+
+## Install
+
+Use it in place of the upstream image; nothing else changes.
+
+```bash
+docker pull ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.1
+```
+
+The image is signed with Sigstore keyless signing by this repository's release workflow:
+
+```bash
+cosign verify ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.1 \
+  --certificate-identity-regexp '^https://github.com/lirei-lab/iofog-controller/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+## What differs from upstream
+
+Branch `lirei/3.9.4` is the tag `v3.9.4` plus one commit per change; each commit message says what was wrong, how it was found and what the change does. Releases are tagged `v<upstream>-lirei.<n>`.
+
+- Await change tracking and report agent clock skew
+- Do not hand the agent a watermark for changes it was not given
+- Refresh a node's NATS account bundle when a microservice lands on it
+- Render the leaf remote for an account when its microservice lands
+- Record why a node was deprovisioned for a hardware change
+- A deprovisioned node is not watched in the controller either
+- Detect a dead leaf link in seconds not minutes
+- Reconcile a node only when its platform spec changed and drain the queue
+- Do not audit an agent's routine heartbeats
+- TLS on the NATS client port
+- The exec relay trusts the NATS site CA
+- Deleting a missing application is a 404
+- A config map patch without immutable keeps it
+- A transaction that timed out rolls back
+- An application PUT leaves alone the microservices it did not change
+- An agent's acknowledgement deletes exactly the change rows it was given
+- Delivery by generation
+- NATS configuration reconciled
+- A router is never its own upstream
+- A lagging microservice waits from its first lag
+- Leaf credentials in a savepoint and PostgreSQL deadlocks retried
+
+Two of these were offered upstream: [#41](https://github.com/Datasance/Controller/pull/41) (change tracking) and [#42](https://github.com/Datasance/Controller/pull/42) (agent clock skew).
+
+Upstream's README follows.
+
+---
+
 # Controller
 
 [![CI](https://github.com/eclipse-iofog/Controller/actions/workflows/ci.yaml/badge.svg)](https://github.com/eclipse-iofog/Controller/actions/workflows/ci.yaml)
