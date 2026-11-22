@@ -3049,6 +3049,32 @@ async function _updateChangeTracking (configUpdated, fogNodeUuid, transaction) {
   } else {
     await ChangeTrackingService.update(fogNodeUuid, ChangeTrackingService.events.microserviceList, transaction)
   }
+
+  // A node's NATS leaf resolves accounts from a directory this controller pushes
+  // to it, so a microservice that lands on a node whose leaf does not hold its
+  // application's account cannot connect at all. Every client of it is refused
+  // with "Authorization Violation", and the node's own server log is the only
+  // place that says why: "Account fetch failed: fetching jwt timed out".
+  //
+  // nats-service already has the function for this, and its docstring already
+  // says when to call it -- "after creating or updating a microservice with
+  // natsAccess so the leaf gets creds for that app". It was defined, exported and
+  // never called from anywhere. This is that call, in the same transaction, which
+  // is what makes the new microservice visible to _getLeafAppIds.
+  //
+  // Required here rather than at the top of the file because this runs on every
+  // microservice change and nats-service pulls in much of the service layer.
+  //
+  // Failures are logged, not thrown: a node whose leaf credentials cannot be
+  // refreshed should not stop an unrelated microservice from being created. The
+  // trade-off is that the refresh is best-effort, which is still strictly better
+  // than never running at all.
+  try {
+    const NatsService = require('./nats-service')
+    await NatsService.ensureLeafCredsForFog(fogNodeUuid, transaction)
+  } catch (error) {
+    logger.warn(`Unable to refresh NATS leaf credentials for fog ${fogNodeUuid}: ${error.message}`)
+  }
 }
 
 async function _checkForDuplicateName (name, item, applicationId, transaction) {
