@@ -60,9 +60,13 @@ async function updateConfigMapEndpoint (configMapName, configMapData, transactio
   // Extract useVault if provided, otherwise keep existing value (null = don't change)
   const useVault = configMapData.useVault !== undefined ? configMapData.useVault : null
 
+  // a PATCH that leaves immutable out keeps it. Passed through as
+  // undefined it was written as null, and the NOT NULL column refused every
+  // update that sent only data ("ConfigMap.immutable cannot be null").
+  const immutable = configMapData.immutable !== undefined ? configMapData.immutable : existingConfigMap.immutable
   const configMap = await ConfigMapManager.updateConfigMap(
     configMapName,
-    configMapData.immutable,
+    immutable,
     configMapData.data,
     useVault,
     transaction
