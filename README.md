@@ -7,13 +7,13 @@
 Use it in place of the upstream image; nothing else changes.
 
 ```bash
-docker pull ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.1
+docker pull ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.2
 ```
 
 The image is signed with Sigstore keyless signing by this repository's release workflow:
 
 ```bash
-cosign verify ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.1 \
+cosign verify ghcr.io/lirei-lab/iofog-controller:3.9.4-lirei.2 \
   --certificate-identity-regexp '^https://github.com/lirei-lab/iofog-controller/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -43,6 +43,8 @@ Branch `lirei/3.9.4` is the tag `v3.9.4` plus one commit per change; each commit
 - A router is never its own upstream
 - A lagging microservice waits from its first lag
 - Leaf credentials in a savepoint and PostgreSQL deadlocks retried
+
+Two dependency fixes are taken from upstream's later commits (`git cherry-pick -x`), so that the release's `npm audit` passes: Secret Manager and Azure Identity bumped (vulnerable `glob` and `minimatch` gone), and `node-forge` 1.4.3 with WebSocket connections counted by the trusted proxy client.
 
 Two of these were offered upstream: [#41](https://github.com/Datasance/Controller/pull/41) (change tracking) and [#42](https://github.com/Datasance/Controller/pull/42) (agent clock skew).
 
