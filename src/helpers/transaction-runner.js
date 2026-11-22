@@ -124,6 +124,9 @@ function withTransactionTimeout (promise, options = {}) {
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
+      // tell the transaction it timed out, so that it rolls
+      // back when it finishes instead of committing what the caller was told failed.
+      if (typeof options.onTimeout === 'function') options.onTimeout(timeoutMs)
       reject(new TransactionTimeoutError(options.label, options.priority, timeoutMs))
     }, timeoutMs)
 
@@ -224,7 +227,7 @@ async function handleTransactionFailure (error, options) {
   if (error instanceof TransactionTimeoutError) {
     recordTransactionTimeout(options.label, options.priority)
     logger.error({
-      msg: 'SQLite transaction timed out',
+      msg: `${getProviderName()} transaction timed out`,
       label: options.label,
       priority: options.priority,
       timeoutMs: error.timeoutMs
@@ -273,15 +276,26 @@ async function executeTransaction (fn, options) {
   const priority = options.priority || PRIORITY_INTERACTIVE
   const label = options.label || 'unknown'
 
+  // the timeout rejected the caller but left the transaction
+  // running, and it committed afterwards -- a 500 for an application that was then
+  // created all the same (measured: ten NATS microservices on ten nodes). Once the
+  // caller has been told it timed out, the transaction rolls back when it finishes.
+  let timedOutAfter = null
   try {
     const result = await withTransactionTimeout(
       withDbBusyRetry(
         () => sequelize.transaction((transaction) => {
-          return activeTransactionStore.run({ transaction, priority }, async () => fn(transaction))
+          return activeTransactionStore.run({ transaction, priority }, async () => {
+            const value = await fn(transaction)
+            if (timedOutAfter != null) {
+              throw new TransactionTimeoutError(label, priority, timedOutAfter)
+            }
+            return value
+          })
         }),
         options
       ),
-      { priority, label, timeoutMs: options.timeoutMs }
+      { priority, label, timeoutMs: options.timeoutMs, onTimeout: (ms) => { timedOutAfter = ms } }
     )
     recordTransactionDuration(
       {
