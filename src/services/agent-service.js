@@ -291,6 +291,12 @@ const getAgentConfigChanges = async function (ioFog, transaction) {
   if (!res.lastUpdated) {
     // Nothing was delivered, so the agent's acknowledgement must delete nothing.
     res.lastUpdated = new Date(0).toISOString()
+  } else {
+    // And the rows themselves, by id, ride on the same string, which the agent
+    // echoes back verbatim: the acknowledgement then deletes exactly the rows
+    // handed over. A timestamp (or an id) cut-off still deleted a row stamped
+    // earlier, or numbered lower, whose transaction committed after this read.
+    res.lastUpdated = ChangeTrackingService.encodeDelivered(res.lastUpdated, changeTrackings.map((c) => c.id))
   }
   return res
 }
