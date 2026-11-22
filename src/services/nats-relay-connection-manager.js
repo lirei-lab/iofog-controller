@@ -85,14 +85,23 @@ class NatsRelayConnectionManager {
         const host = hosts[attempt]
         const servers = `nats://${host}:${port}`
         try {
-          const nc = await this._connectFn({
+          const opts = {
             servers,
             authenticator: credsAuthenticator(creds),
             maxReconnectAttempts: this.maxReconnectAttempts,
             reconnect: true,
             reconnectTimeWait: 1000,
             name: 'controller-ws-relay'
-          })
+          }
+          // the hub's client port offers TLS (patch 0011),
+          // and the client upgrades whenever it is offered, checking the
+          // certificate against "localhost" for an IP host and against the
+          // system CAs. With the site CA given, the relay trusts it and checks
+          // the host it dialled; every exec session failed before.
+          if (process.env.NATS_RELAY_TLS_CA_FILE) {
+            opts.tls = { caFile: process.env.NATS_RELAY_TLS_CA_FILE, host }
+          }
+          const nc = await this._connectFn(opts)
 
           this.connection = nc
           this.connectionPromise = null
