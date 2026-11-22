@@ -11,6 +11,7 @@ const TransactionDecorator = require('../decorators/transaction-decorator')
 const ApplicationTemplateService = require('./application-template-service')
 const Validator = require('../schemas')
 const remove = require('lodash/remove')
+const FogManager = require('../data/managers/iofog-manager')
 const NatsAccountRuleManager = require('../data/managers/nats-account-rule-manager')
 const NatsRuleJwtValidation = require('../helpers/nats-rule-jwt-validation')
 const NatsAuthService = require('./nats-auth-service')
@@ -314,6 +315,83 @@ async function _resolveApplicationNatsConfig (applicationData, transaction, exis
   return { natsAccess, natsRuleId }
 }
 
+// Whether a microservice of an application PUT is what is already stored. Each
+// field the request carries is compared with the stored microservice as the API
+// returns it, after leaving out what the Controller adds itself: null defaults,
+// row ids, the TCP protocol default, the service account volume it injects, an
+// empty health check. A field it cannot compare counts as changed, so the worst
+// case is the old behaviour: an update.
+const SERVICE_ACCOUNT_PATH = '/var/run/secrets/edgelet.iofog.org/serviceaccount'
+const INJECTED_VOLUMES = [SERVICE_ACCOUNT_PATH, '/etc/nats/creds']
+const INJECTED_ENV = ['NATS_SERVER_URL', 'NATS_CREDS_PATH']
+function _norm (v) {
+  if (Array.isArray(v)) {
+    return v.map(_norm).map((x) => JSON.stringify(x)).sort()
+  }
+  if (v && typeof v === 'object') {
+    const out = {}
+    for (const k of Object.keys(v).sort()) {
+      if (k === 'id' || v[k] === null || v[k] === undefined) continue
+      const n = _norm(v[k])
+      if (n && typeof n === 'object' && !Array.isArray(n) && Object.keys(n).length === 0) continue
+      out[k] = n
+    }
+    return out
+  }
+  return v
+}
+const _unchangedMicroservice = async function (oldMsvc, requested, transaction) {
+  try {
+    const stored = await MicroserviceService.buildGetMicroserviceResponse(oldMsvc.dataValues || oldMsvc, transaction)
+    for (const key of Object.keys(requested)) {
+      let want = requested[key]
+      // Plain values: some stored lists are model instances.
+      let have = stored[key] === undefined ? undefined : JSON.parse(JSON.stringify(stored[key]))
+      if (want === undefined) continue
+      if (key === 'agentName') {
+        const fog = await FogManager.findOne({ name: want }, transaction)
+        if (!fog || fog.uuid !== oldMsvc.iofogUuid) {
+          logger.info(`application PUT updates microservice ${oldMsvc.name}: agentName differs from what is stored`)
+          return false
+        }
+        continue
+      }
+      if (key === 'volumeMappings') {
+        // The Controller mounts the service account and, with NATS access, the
+        // NATS credentials itself; a volume's scope defaults to private.
+        const asked = new Set((want || []).map((v) => v.containerDestination))
+        have = (have || []).filter((v) => !(INJECTED_VOLUMES.includes(v.containerDestination) && !asked.has(v.containerDestination)))
+        want = (want || []).filter((v) => v.containerDestination !== SERVICE_ACCOUNT_PATH)
+          .map((v) => ({ scope: 'private', ...v }))
+      }
+      if (key === 'env') {
+        // With NATS access the Controller sets these two itself.
+        const asked = new Set((want || []).map((e) => e.key))
+        have = (have || []).filter((e) => !(INJECTED_ENV.includes(e.key) && !asked.has(e.key)))
+      }
+      if (key === 'ports') {
+        const tcp = (p) => ({ ...p, protocol: (p.protocol || 'tcp').toLowerCase() })
+        have = (have || []).map(tcp)
+        want = (want || []).map(tcp)
+      }
+      const empty = (x) => x === undefined || x === null || (Array.isArray(x) && x.length === 0) ||
+        (typeof x === 'object' && !Array.isArray(x) && Object.keys(x).length === 0)
+      const a = _norm(want)
+      const b = _norm(have)
+      if (empty(a) && empty(b)) continue
+      if (JSON.stringify(a) !== JSON.stringify(b)) {
+        // Which field made it an update -- the name only, values may be secrets.
+        logger.info(`application PUT updates microservice ${oldMsvc.name}: ${key} differs from what is stored`)
+        return false
+      }
+    }
+    return true
+  } catch (e) {
+    logger.warn(`unchanged-microservice check failed for ${oldMsvc.name}, updating it: ${e.message}`)
+    return false
+  }
+}
+
 const _updateMicroservices = async function (application, microservices, isCLI, transaction) {
   const updatedMicroservices = [...microservices]
   // Update microservices
@@ -331,6 +409,13 @@ const _updateMicroservices = async function (application, microservices, isCLI, 
       iofogUuids.push(oldMsvc.iofogUuid)
     } else {
       const updatedMsvc = removed[0]
+      // An application PUT carries every microservice whole. Updating one that
+      // did not change sets its rebuild flag anyway (env, ports, volumes... count
+      // as changed when present), so an unchanged PUT recreated every container
+      // of the application. Leave alone what is the same as stored.
+      if (await _unchangedMicroservice(oldMsvc, updatedMsvc, transaction)) {
+        continue
+      }
       const updatedMicroservices = await MicroserviceService.updateMicroserviceEndPoint(oldMsvc.uuid, updatedMsvc, isCLI, transaction, false)
       oldMsvcsIofogUuids.push(updatedMicroservices.microserviceIofogUuid)
       updatedMsvcsUuid.push(updatedMicroservices.updatedMicroserviceIofogUuid)
