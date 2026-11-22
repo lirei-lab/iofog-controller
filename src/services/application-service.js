@@ -104,7 +104,13 @@ const createApplicationEndPoint = async function (applicationData, isCLI, transa
     }
   } catch (e) {
     // If anything failed during creating the application, delete all that was created
-    await deleteApplicationEndPoint({ name: application.name }, isCLI, transaction)
+    // when nothing was created there is nothing to
+    // delete, and that must not replace the error that made the create fail.
+    try {
+      await deleteApplicationEndPoint({ name: application.name }, isCLI, transaction)
+    } catch (cleanupError) {
+      if (!(cleanupError instanceof Errors.NotFoundError)) throw cleanupError
+    }
     throw e
   }
 }
@@ -116,6 +122,10 @@ const deleteApplicationEndPoint = async function (conditions, isCLI, transaction
   const where = AppHelper.deleteUndefinedFields(whereObj)
 
   const application = await ApplicationManager.findOne({ ...conditions }, transaction)
+  // an unknown application is a 404, not a TypeError on null (500).
+  if (!application) {
+    throw new Errors.NotFoundError(AppHelper.formatMessage(ErrorMessages.INVALID_APPLICATION_ID, conditions.name || conditions.id))
+  }
 
   if (application.isSystem) {
     throw new Errors.ValidationError('Cannot delete system application.')
@@ -135,6 +145,9 @@ const deleteSystemApplicationEndPoint = async function (conditions, isCLI, trans
   const where = AppHelper.deleteUndefinedFields(whereObj)
 
   const application = await ApplicationManager.findOne({ ...conditions }, transaction)
+  if (!application) {
+    throw new Errors.NotFoundError(AppHelper.formatMessage(ErrorMessages.INVALID_APPLICATION_ID, conditions.name || conditions.id))
+  }
 
   await _updateChangeTrackingsAndDeleteMicroservicesByApplicationId(conditions, true, transaction)
 
