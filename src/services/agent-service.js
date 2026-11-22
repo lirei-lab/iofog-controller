@@ -468,9 +468,18 @@ const _resendLaggingMicroservices = async function (agentStatus, reportedStatuse
       continue
     }
     let lag = _lagging.get(key)
-    if (!lag || lag.generation !== generation) {
+    if (!lag) {
       lag = { generation, since: now, resentAt: 0, resends: 0 }
       _lagging.set(key, lag)
+    } else if (lag.generation !== generation) {
+      // A newer generation renews the resend budget but not the wait: the wait
+      // counts from the first time the microservice lagged. Restarted on every
+      // generation, a node whose microservices change every few seconds never
+      // lagged for 60 s and was never sent the list again (field-01's
+      // microservice placed during a reboot, never fetched, generation 15 in five
+      // minutes, cluster 2026-10-20).
+      lag.generation = generation
+      lag.resends = 0
     }
     if (now - lag.since < RESEND_AFTER_MS || now - lag.resentAt < RESEND_EVERY_MS) {
       continue
