@@ -11,10 +11,21 @@ const { runInTransaction, PRIORITY_BACKGROUND } = require('../helpers/transactio
 
 const scheduleTime = (Config.get('settings.fogPlatformReconcileWorkerIntervalSeconds', 3)) * 1000
 
+// Tasks are drained back to back while there are any: one
+// task per interval made a fleet-wide change cost (reconcile + interval) per node,
+// about 4.4 s + 3.6 s measured, in series. Bounded, so the event loop is still
+// yielded to between rounds.
+const MAX_TASKS_PER_ROUND = 50
+
 async function run () {
   try {
-    await processNextFogTask()
-    await processNextServiceTask()
+    for (let i = 0; i < MAX_TASKS_PER_ROUND; i++) {
+      const didFog = await processNextFogTask()
+      const didService = await processNextServiceTask()
+      if (!didFog && !didService) {
+        break
+      }
+    }
   } catch (error) {
     logger.error({ err: error, msg: 'Platform reconcile worker error' })
   } finally {
@@ -53,7 +64,7 @@ async function runFogReconcileForTask (task) {
 async function processNextFogTask () {
   const uuid = ClusterControllerService.getCurrentControllerUuid()
   if (!uuid) {
-    return
+    return false
   }
 
   const stalenessSeconds = Config.get('settings.fogPlatformReconcileTaskStalenessSeconds', 300)
@@ -62,11 +73,11 @@ async function processNextFogTask () {
     task = await FogPlatformReconcileTaskManager.claimNextFogTask(uuid, stalenessSeconds)
   } catch (error) {
     logger.error({ err: error, msg: 'Fog platform reconcile task claim failed' })
-    return
+    return false
   }
 
   if (!task) {
-    return
+    return false
   }
 
   try {
@@ -107,12 +118,13 @@ async function processNextFogTask () {
       })
     }
   }
+  return true
 }
 
 async function processNextServiceTask () {
   const uuid = ClusterControllerService.getCurrentControllerUuid()
   if (!uuid) {
-    return
+    return false
   }
 
   const stalenessSeconds = Config.get('settings.fogPlatformReconcileTaskStalenessSeconds', 300)
@@ -121,11 +133,11 @@ async function processNextServiceTask () {
     task = await ServicePlatformReconcileTaskManager.claimNextServiceTask(uuid, stalenessSeconds)
   } catch (error) {
     logger.error({ err: error, msg: 'Service platform reconcile task claim failed' })
-    return
+    return false
   }
 
   if (!task) {
-    return
+    return false
   }
 
   try {
@@ -168,6 +180,7 @@ async function processNextServiceTask () {
       })
     }
   }
+  return true
 }
 
 async function handleFogTaskFailure (task, error) {

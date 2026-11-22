@@ -586,13 +586,17 @@ async function updateFogEndPoint (fogData, isCLI, transaction) {
   const existingSpec = parsedSpec ? parsedSpec.spec : {}
   const mergedSpec = mergePlatformSpecPatch(existingSpec, fogData)
 
-  const { generation } = await FogPlatformSpecManager.upsertSpec(fogData.uuid, mergedSpec, transaction)
-  await FogPlatformStatusManager.ensurePending(fogData.uuid, transaction)
-  await ReconcileOutboxManager.enqueueFogPlatform({
-    fogUuid: fogData.uuid,
-    reason: 'spec-changed',
-    specGeneration: generation
-  }, transaction)
+  const { generation, unchanged } = await FogPlatformSpecManager.upsertSpec(fogData.uuid, mergedSpec, transaction)
+  // Nothing the platform is built from changed: no reconcile, and the node is not
+  // put back to Pending (and reported WARNING) for it.
+  if (!unchanged) {
+    await FogPlatformStatusManager.ensurePending(fogData.uuid, transaction)
+    await ReconcileOutboxManager.enqueueFogPlatform({
+      fogUuid: fogData.uuid,
+      reason: 'spec-changed',
+      specGeneration: generation
+    }, transaction)
+  }
 
   return { uuid: fogData.uuid }
 }

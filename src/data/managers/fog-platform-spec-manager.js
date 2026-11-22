@@ -30,6 +30,12 @@ class FogPlatformSpecManager extends BaseManager {
     const specJson = serializeSpecJson(sanitized)
 
     const existing = await this.findOne({ fogUuid }, transaction)
+    // The same spec is not a new generation: every PATCH of a
+    // node -- a tag rewrite with the same tags included -- bumped it, and the
+    // caller then reconciled the node's router and NATS and held it Pending.
+    if (existing && existing.specJson === specJson) {
+      return { fogUuid, generation: existing.generation, specJson, unchanged: true }
+    }
     if (existing) {
       const generation = existing.generation + 1
       await this.update({ fogUuid }, { specJson, generation }, transaction)
