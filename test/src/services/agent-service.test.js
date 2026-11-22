@@ -287,7 +287,8 @@ describe('Agent Service', () => {
 
   describe('.agentDeprovision()', () => {
     const deprovisionData = { microserviceUuids: ['uuid'] }
-    const fogManagerUpdateData = { daemonStatus: FogStates.DEPROVISIONED, ipAddress: '0.0.0.0', ipAddressExternal: '0.0.0.0' }
+    // a deprovisioned node is not watched (edgeGuardFrequency 0)
+    const fogManagerUpdateData = { daemonStatus: FogStates.DEPROVISIONED, ipAddress: '0.0.0.0', ipAddressExternal: '0.0.0.0', edgeGuardFrequency: 0 }
 
     const transaction = {}
     const error = 'Error!'

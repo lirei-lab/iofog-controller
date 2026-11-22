@@ -160,12 +160,26 @@ const agentDeprovision = async function (deprovisionData, fog, transaction) {
 
 const _invalidateFogNode = async function (fog, transaction) {
   const where = { uuid: fog.uuid }
-  const data = { daemonStatus: FogStates.DEPROVISIONED, ipAddress: '0.0.0.0', ipAddressExternal: '0.0.0.0' }
+  // edgeGuardFrequency goes to 0 with the rest: the agent resets its own copy when
+  // it deprovisions (fieldagent/agent.go), and a deprovisioned node is not watched.
+  // Leaving the old frequency here made the Controller claim a watch that did not
+  // exist, and once agents adopt the Controller's value at start-up instead of
+  // imposing their own (Edgelet lab patch 0009), it re-armed a node EdgeGuard had
+  // just removed for a hardware change -- measured on field-09, which came back
+  // from recovery watching every 30 s with its changed hardware silently accepted.
+  // Re-arming is an operator's decision.
+  const data = {
+    daemonStatus: FogStates.DEPROVISIONED,
+    ipAddress: '0.0.0.0',
+    ipAddressExternal: '0.0.0.0',
+    edgeGuardFrequency: 0
+  }
   await FogManager.update(where, data, transaction)
   const updatedFog = Object.assign({}, fog)
   updatedFog.daemonStatus = FogStates.DEPROVISIONED
   updatedFog.ipAddress = '0.0.0.0'
   updatedFog.ipAddressExternal = '0.0.0.0'
+  updatedFog.edgeGuardFrequency = 0
   return updatedFog
 }
 
