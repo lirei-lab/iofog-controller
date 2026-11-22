@@ -3069,10 +3069,26 @@ async function _updateChangeTracking (configUpdated, fogNodeUuid, transaction) {
   // refreshed should not stop an unrelated microservice from being created. The
   // trade-off is that the refresh is best-effort, which is still strictly better
   // than never running at all.
+  //
+  // In a savepoint, so that swallowing a failure leaves the transaction usable: on
+  // PostgreSQL a failed statement aborts the whole transaction, and the caller's
+  // next statement then failed with "current transaction is aborted" -- a 500 for
+  // the application being created. A deadlock or serialization failure is thrown
+  // on instead, so the transaction runner retries the whole transaction.
+  const { isSqliteBusyError } = require('../helpers/db-busy-retry')
   try {
     const NatsService = require('./nats-service')
-    await NatsService.ensureLeafCredsForFog(fogNodeUuid, transaction)
+    if (transaction && transaction.sequelize) {
+      const { runInSavepoint } = require('../helpers/transaction-runner')
+      await runInSavepoint(transaction, (savepoint) =>
+        NatsService.ensureLeafCredsForFog(fogNodeUuid, savepoint))
+    } else {
+      await NatsService.ensureLeafCredsForFog(fogNodeUuid, transaction)
+    }
   } catch (error) {
+    if (isSqliteBusyError(error)) {
+      throw error
+    }
     logger.warn(`Unable to refresh NATS leaf credentials for fog ${fogNodeUuid}: ${error.message}`)
   }
 }

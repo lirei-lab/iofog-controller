@@ -14,7 +14,15 @@ function isSqliteBusyError (error) {
     error.parent && error.parent.message,
     error.original && error.original.message
   ]
-  return messages.some((message) => message && message.indexOf('SQLITE_BUSY') !== -1)
+  if (messages.some((message) => message && message.indexOf('SQLITE_BUSY') !== -1)) {
+    return true
+  }
+  // PostgreSQL's equivalents: a deadlock victim (40P01) and a serialization
+  // failure (40001) are retried as a whole transaction, which is what Postgres
+  // asks of its clients. Seen as a 500 on POST /application/yaml while leaf
+  // credentials were refreshed for the same fog.
+  const codes = [error.parent && error.parent.code, error.original && error.original.code, error.code]
+  return codes.some((code) => code === '40P01' || code === '40001')
 }
 
 function sleep (ms) {

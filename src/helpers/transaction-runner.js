@@ -480,6 +480,15 @@ function _resetQueueForTests () {
   interactiveTimeoutTimestamps.length = 0
 }
 
+/**
+ * fn(savepoint) in a savepoint of the caller's transaction: a statement that fails
+ * there rolls back to it and leaves the transaction usable (on PostgreSQL a failed
+ * statement otherwise aborts the whole transaction).
+ */
+function runInSavepoint (transaction, fn) {
+  return transaction.sequelize.transaction({ transaction }, fn)
+}
+
 module.exports = {
   PRIORITY_BACKGROUND,
   PRIORITY_INTERACTIVE,
@@ -493,6 +502,7 @@ module.exports = {
   getWriteQueueMaxDepth,
   getTransactionTimeoutMs,
   isSqliteProvider,
+  runInSavepoint,
   runInTransaction,
   runSqliteReadOutsideQueue,
   runWithTransactionContext,
